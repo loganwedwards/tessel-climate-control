@@ -1,95 +1,145 @@
-const mqtt = require('mqtt')
-const mqttOptions = {
-  username: process.env.MQTT_USER,
-  password: process.env.MQTT_PASSWORD,
+var mqtt = require('mqtt')
+var config = require('./env.json')
+var mqttOptions = {
+  username: config.MQTT_USER,
+  password: config.MQTT_PASSWORD,
+  // host: config.MQTT_HOST,
+  // port: 1883,
 }
-const interval = process.env.UPDATE_INTERVAL || 5000
-const client = mqtt.connect(process.env.MQTT_HOST, mqttOptions)
-const channel = process.env.MQTT_PREFIX
-const mqttChannels = {
-  temperature: `${channel}/temperature`,
-  humidity: `${channel}/humidity`,
-  switch: `${channel}/switch`,
-  pong: `${channel}/pong`,
-  ping: `${channel}/ping`,
-  error: `${channel}/error`,
+// var client = undefined
+// console.log = function () {}
+var interval = config.UPDATE_INTERVAL || 5000
+var mqttHost = 'mqtt://' + config.MQTT_HOST
+console.log('Attempting to connect to ', config.MQTT_HOST)
+var client
+var channel = config.MQTT_PREFIX
+var mqttChannels = {
+  temperature: channel + '/temperature',
+  humidity: channel + '/humidity',
+  switch: channel + '/switch',
+  pong: channel + '/pong',
+  ping: channel + '/ping',
+  error: channel + '/error',
+}
+
+function wifiConnected() {
+  var interfaces = require('os').networkInterfaces()
+  console.log(interfaces)
+  if (!Object.keys(interfaces).length) return false
+  var ip = interfaces.en1[0].address
+  console.log('wifi ip address ', ip)
+  return !!ip
 }
 
 var relay1On = false // false === off
-const tempThreshold = process.env.TEMP_F_SETTING
+var tempThreshold = config.TEMP_F_SETTING
 
 require('tesselate')(
   {
     modules: {
       A: ['relay-mono', 'relay'],
-      B: ['climate-si7020', 'climate'],
+      B: ['climate-si7005', 'climate'],
     },
   },
   function (tessel, modules) {
-    const relay = modules.relay
-    const climate = modules.climate
+    var relay = modules.relay
+    var climate = modules.climate
+    var relayStatusLed = tessel.led[1]
+    console.log('Hardware ready!')
 
-    console.log('Connected to si7005')
-    const relayStatusLed = tessel.led[1]
+    client = mqtt.connect(mqttHost, mqttOptions)
 
     function check(temp) {
       if (temp >= tempThreshold && !relay1On) {
         console.log('Enabling output')
-        relay.turnOn(1, handleError)
+        relay.turnOn(1)
+        relay1On = true
         relayStatusLed.write(true)
       }
       if (temp < tempThreshold) {
         console.log('Disabling output')
-        relay.turnOff(1, handleError)
-        relayStatusLed.write(false)
+        if (relay1On) {
+          relay.turnOff(1)
+          relay1On = false
+          relayStatusLed.write(false)
+        }
       }
     }
 
     // Loop forever
-    setImmediate(function loop() {
+    function loop() {
+      if (
+        !client ||
+        (!client.connected && !client.reconnecting && wifiConnected())
+      ) {
+        client = mqtt.connect(mqttHost, mqttOptions)
+      }
+
       climate.readTemperature('f', function (err, temp) {
         if (err) {
           return handleError(err)
         }
         check(temp)
-        client.publish(mqttChannels.temperature, temp.toFixed(2))
+        publish(mqttChannels.switch, relay1On ? 'true' : 'false')
+        publish(mqttChannels.temperature, temp.toFixed(2))
         climate.readHumidity(function (err, humid) {
           if (err) {
             return handleError(err)
           }
-          client.publish(mqttChannels.humidity, humid.toFixed(2))
+          publish(mqttChannels.humidity, humid.toFixed(2))
           console.log(
-            'Temperature: ',
+            'Temperature:',
             temp.toFixed(2) + ' F',
-            'Humidity: ',
+            'Humidity:',
             humid.toFixed(2) + ' %RH'
           )
-          setTimeout(loop, interval)
         })
       })
-    })
+    }
+
+    var loop = setInterval(loop.bind(this), interval)
 
     climate.on('error', function (err) {
       console.log('error connecting module', err)
       handleError(err)
     })
+
+    function publish(channel, value) {
+      if (client && client.connected) {
+        console.log('Publishing ', channel, value)
+        client.publish(channel, value)
+      } else {
+        // console.log('MQTT not defined or not connected ', client)
+        console.log('! MQTT not ready !')
+      }
+    }
+
+    client.on('connect', function () {
+      console.log('MQTT connected!')
+      tessel.led[0].write(true)
+      client.publish(mqttChannels.pong, '1')
+      client.subscribe(mqttChannels.ping, function (err) {
+        if (!err) {
+          client.publish(mqttChannels.pong, '1')
+        } else {
+          console.log('There was an error connecting to MQTT ', err)
+        }
+      })
+    })
+
+    client.on('close', function () {
+      tessel.led[0].write(false)
+    })
+
+    client.on('message', function (topic, message) {
+      // message is Buffer
+      console.log(message.toString())
+      client.end()
+    })
   }
 )
 
 function handleError(err) {
-  client.publish(mqttChannels.error, JSON.stringify(err.message))
+  console.log('Error ', err)
+  // publish(mqttChannels.error, JSON.stringify(err))
 }
-
-client.on('connect', function () {
-  client.subscribe(mqttChannels.ping, function (err) {
-    if (!err) {
-      client.publish(mqttChannels.pong, 1)
-    }
-  })
-})
-
-client.on('message', function (topic, message) {
-  // message is Buffer
-  console.log(message.toString())
-  client.end()
-})
