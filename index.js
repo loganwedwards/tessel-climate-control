@@ -2,7 +2,7 @@ var tessel = require('tessel')
 var mqtt = require('mqtt')
 var config = require('./env.json')
 var relayLib = require('relay-mono')
-var climateLib = require('climate-si7005')
+var climateLib = require('climate-si7020')
 var leds = tessel.led
 var mqttLed = leds[2]
 var relayLed = leds[3]
@@ -77,17 +77,25 @@ function start() {
   function check(temp) {
     if (temp >= tempThreshold && !relay1On) {
       console.log('Enabling output')
-      relay.turnOn(1)
+      relay.turnOn(1, (err) => relayCallback(err, true))
       relay1On = true
       relayLed.on()
     }
     if (temp < tempThreshold) {
       console.log('Disabling output')
       if (relay1On) {
-        relay.turnOff(1)
+        relay.turnOff(1, (err) => relayCallback(err, false))
         relay1On = false
         relayLed.off()
       }
+    }
+  }
+
+  function relayCallback(err) {
+    if (err && client.connected) {
+      publish(mqttChannels.error, err.message)
+    } else {
+      publish(mqttChannels.switch, relay1On ? 'true' : 'false')
     }
   }
 
@@ -106,7 +114,7 @@ function start() {
         return handleError(err)
       }
       check(temp)
-      publish(mqttChannels.switch, relay1On ? 'true' : 'false')
+
       publish(mqttChannels.temperature, temp.toFixed(2))
       climate.readHumidity(function (err, humid) {
         if (err) {
@@ -144,6 +152,7 @@ function start() {
         client.publish(mqttChannels.pong, '1')
       } else {
         console.log('There was an error connecting to MQTT ', err)
+        mqttLed.off()
       }
     })
   })

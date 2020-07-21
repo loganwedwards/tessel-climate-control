@@ -4,8 +4,7 @@
   "description": "a simple controller and notifier for your climate needs",
   "main": "index.js",
   "dependencies": {
-    "climate-si7005": "^0.1.5",
-    "dotenv": "^8.2.0",
+    "climate-si7020": "^0.1.1",
     "mqtt": "^1.14.1",
     "relay-mono": "^0.1.3"
   },
