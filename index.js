@@ -10,6 +10,7 @@ var states = {
   relay: false,
   climate: false,
 }
+var delay = 15000 // reconnect timeout
 var relay = relayLib.use(tessel.port['A'])
 var climate = climateLib.use(tessel.port['B'])
 
@@ -48,8 +49,8 @@ function wifiConnected() {
   // console.log('wifi ip address ', ip)
   // return !!ip
   console.log('Checking wifi connectivity')
-  console.log(tessel.network)
-  return tessel.network.wifi.isConnected()
+  console.log('is wifi connected? ', tessel.network.wifi.isConnected)
+  return tessel.network.wifi.isConnected
 }
 
 var relay1On = false // false === off
@@ -72,7 +73,9 @@ function start() {
   console.log('Starting up...')
   console.log('Hardware ready!')
   console.log('Attempting to connect to MQTT: ', config.MQTT_HOST)
-  client = mqtt.connect(mqttHost, mqttOptions)
+  if (!client || !client.reconnecting) {
+    client = mqtt.connect(mqttHost, mqttOptions)
+  }
 
   function check(temp) {
     if (temp >= tempThreshold && !relay1On) {
@@ -91,11 +94,11 @@ function start() {
     }
   }
 
-  function relayCallback(err) {
+  function relayCallback(err, val) {
     if (err && client.connected) {
       publish(mqttChannels.error, err.message)
     } else {
-      publish(mqttChannels.switch, relay1On ? 'true' : 'false')
+      publish(mqttChannels.switch, val ? 'on' : 'off')
     }
   }
 
@@ -106,7 +109,11 @@ function start() {
       (!client.connected && !client.reconnecting && wifiConnected())
     ) {
       console.log('Attempting mqtt reconnect')
-      client = mqtt.connect(mqttHost, mqttOptions)
+      if (client) {
+        client.reconnect()
+      } else {
+        client = mqtt.connect(mqttHost, mqttOptions)
+      }
     }
     console.log('read temperature')
     climate.readTemperature('f', function (err, temp) {
@@ -159,6 +166,16 @@ function start() {
 
   client.on('close', function () {
     mqttLed.off()
+    setTimeout(function () {
+      start()
+    }, delay)
+  })
+
+  client.on('end', function () {
+    mqttLed.off()
+    setTimeout(function () {
+      start()
+    }, delay)
   })
 
   client.on('message', function (topic, message) {
