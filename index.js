@@ -73,6 +73,9 @@ function start() {
   console.log('Starting up...')
   console.log('Hardware ready!')
   console.log('Attempting to connect to MQTT: ', config.MQTT_HOST)
+  if (client) {
+    client.end()
+  }
   if (!client || !client.reconnecting) {
     client = mqtt.connect(mqttHost, mqttOptions)
   }
@@ -153,10 +156,10 @@ function start() {
   client.on('connect', function () {
     console.log('MQTT connected!')
     mqttLed.on()
-    client.publish(mqttChannels.pong, '1')
+    client.publish(mqttChannels.pong, 'online')
     client.subscribe(mqttChannels.ping, function (err) {
       if (!err) {
-        client.publish(mqttChannels.pong, '1')
+        client.publish(mqttChannels.pong, 'online')
       } else {
         console.log('There was an error connecting to MQTT ', err)
         mqttLed.off()
